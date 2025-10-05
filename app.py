@@ -1,108 +1,142 @@
-from flask import Flask, render_template, request
-from geopy.geocoders import Nominatim
-import xarray as xr
-import datetime
+from flask import Flask, render_template, request, jsonify
+from datetime import datetime
+import json
+
+from nasa_enhanced import EnhancedNASAWeather
 
 app = Flask(__name__)
+nasa_weather = EnhancedNASAWeather()
 
-# NASA OPeNDAP dataset URLs — replace with real working ones later
-DATASETS = {
-    "temperature": "https://opendap.nccs.nasa.gov/dods/MERRA2/M2I1NXASM_5.12.4",
-    "rainfall": "https://opendap.nccs.nasa.gov/dods/GPCP",
-    "windspeed": "https://opendap.nccs.nasa.gov/dods/MERRA2/M2I3NPASM",
-    "dust": "https://opendap.nccs.nasa.gov/dods/MERRA2/M2I3NPANA",
-    "snowfall": "https://opendap.nccs.nasa.gov/dods/MERRA2/M2I1NXASM",
-    "cloudcover": "https://opendap.nccs.nasa.gov/dods/MERRA2/M2I1NXASM",
-}
-
-def geocode_location(location_name):
-    geolocator = Nominatim(user_agent="weather_app")
-    location = geolocator.geocode(location_name)
-    if location:
-        return location.latitude, location.longitude
-    return None, None
-
-def fetch_weather_data(lat, lon, date):
-    results = {}
-    for var, url in DATASETS.items():
-        try:
-            ds = xr.open_dataset(url, decode_times=True)
-
-            # Debug: print dataset variables
-            print(f"Dataset for {var}: {ds}")
-
-            # Attempt to fetch the closest data
-            if var in ds.variables:
-                value = ds[var].sel(lat=lat, lon=lon, method="nearest").sel(time=date, method="nearest").values
-                results[var] = float(value) if value.size > 0 else None
-            else:
-                results[var] = None
-        except Exception as e:
-            results[var] = None
-            print(f"Error fetching {var}: {e}")
-    return results
-
-def personalize_message(weather_data, preferences):
-    messages = []
-
-    try:
-        temp = float(weather_data.get("temperature") or 0)
-        if preferences.get("hot") and temp > 30:
-            messages.append("Very hot day expected — consider staying hydrated.")
-        if preferences.get("cold") and temp < 0:
-            messages.append("Very cold day expected — dress warmly.")
-    except Exception:
-        messages.append("Temperature data unavailable.")
-
-    try:
-        rainfall = float(weather_data.get("rainfall") or 0)
-        if rainfall > 10:
-            messages.append("High precipitation — bring waterproof gear.")
-    except Exception:
-        messages.append("Rainfall data unavailable.")
-
-    try:
-        windspeed = float(weather_data.get("windspeed") or 0)
-        if preferences.get("windy") and windspeed > 10:
-            messages.append("Very windy day expected — caution outdoors.")
-    except Exception:
-        messages.append("Windspeed data unavailable.")
-
-    try:
-        snowfall = float(weather_data.get("snowfall") or 0)
-        if preferences.get("snowy") and snowfall > 5:
-            messages.append("Significant snowfall expected — enjoy the snow!")
-    except Exception:
-        messages.append("Snowfall data unavailable.")
-
-    return messages
-
-@app.route("/", methods=["GET", "POST"])
+@app.route('/')
 def index():
-    if request.method == "POST":
-        location = request.form.get("location")
-        date_str = request.form.get("date")
-        preferences = {
-            "hot": "hot" in request.form,
-            "cold": "cold" in request.form,
-            "windy": "windy" in request.form,
-            "snowy": "snowy" in request.form,
+    return render_template('index.html')
+
+@app.route('/api/geocode', methods=['POST'])
+def geocode_location():
+    """Geocode a location name to coordinates"""
+    try:
+        data = request.json
+        location_name = data.get('location', '').strip()
+        
+        if not location_name:
+            return jsonify({'success': False, 'error': 'Location name is required'})
+        
+        result = nasa_weather.geocode_location(location_name)
+        
+        if result:
+            return jsonify({
+                'success': True,
+                'location': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Location not found'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/weather-predict', methods=['POST'])
+def weather_predict():
+    """Get weather predictions for a location"""
+    try:
+        data = request.json
+        lat = float(data.get('lat', -1.2921))
+        lon = float(data.get('lon', 36.8219))
+        user_type = data.get('user_type', 'farmer')
+        days = int(data.get('days', 365))
+        
+        print(f"Getting predictions for {lat}, {lon}...")
+        
+        predictions = nasa_weather.predict_weather(lat, lon, days)
+        seasonal = nasa_weather.get_seasonal_summary(predictions)
+        advice = nasa_weather.get_user_advice(user_type, predictions)
+        
+        response = {
+            'success': True,
+            'location': {'lat': lat, 'lon': lon},
+            'predictions': predictions,
+            'seasonal_forecast': seasonal,
+            'user_advice': advice,
+            'generated_at': datetime.now().isoformat()
         }
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/specific-day', methods=['POST'])
+def specific_day_weather():
+    """Get weather data for a specific day"""
+    try:
+        data = request.json
+        lat = float(data.get('lat', -1.2921))
+        lon = float(data.get('lon', 36.8219))
+        target_date = data.get('date')
+        user_type = data.get('user_type', 'farmer')
+        
+        if not target_date:
+            return jsonify({'success': False, 'error': 'Date is required'})
+        
+        # Validate date format
         try:
-            date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-        except Exception:
-            return render_template("index.html", error="Invalid date format.")
+            datetime.strptime(target_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'})
+        
+        day_data = nasa_weather.get_specific_day_data(lat, lon, target_date)
+        
+        if day_data:
+            # Get advice for this specific day
+            predictions = nasa_weather.predict_weather(lat, lon, days=30)
+            advice = nasa_weather.get_user_advice(user_type, predictions, specific_day_data=day_data)
+            
+            response = {
+                'success': True,
+                'location': {'lat': lat, 'lon': lon},
+                'date': target_date,
+                'data': day_data,
+                'user_advice': advice,
+                'generated_at': datetime.now().isoformat()
+            }
+            return jsonify(response)
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'No data available for {target_date}'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-        lat, lon = geocode_location(location)
-        if lat is None:
-            return render_template("index.html", error="Location not found.")
+@app.route('/api/test')
+def test_api():
+    """Test endpoint"""
+    try:
+        predictions = nasa_weather.predict_weather(-1.2921, 36.8219, 7)
+        return jsonify({
+            'success': True,
+            'message': 'API is working',
+            'sample_predictions': predictions[:3]
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-        weather_data = fetch_weather_data(lat, lon, date)
-        messages = personalize_message(weather_data, preferences)
-
-        return render_template("results.html", location=location, date=date_str, data=weather_data, messages=messages)
-
-    return render_template("index.html")
-
-if __name__ == "__main__":
-    app.run(debug=True)
+if __name__ == '__main__':
+    print("Starting Enhanced NASA Weather Predictor...")
+    print("Visit http://localhost:5000 in your browser")
+    app.run(debug=True, host='0.0.0.0', port=5000)
