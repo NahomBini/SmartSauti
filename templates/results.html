@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Weather Results</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1 class="mt-5">Weather Results for {{ location }} on {{ date }}</h1>
+        <div class="mt-4">
+            <h3>Weather Data</h3>
+            <ul>
+                {% for var, value in data.items() %}
+                    <li><strong>{{ var.capitalize() }}:</strong> {{ value }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="mt-4">
+            <h3>Personalized Messages</h3>
+            <ul>
+                {% for message in messages %}
+                    <li>{{ message }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        <a href="/" class="btn btn-secondary mt-4">Back</a>
+    </div>
+</body>
+</html>
